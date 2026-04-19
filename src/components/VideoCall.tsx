@@ -95,6 +95,12 @@ export default function VideoCall() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (remoteStream && remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = remoteStream;
+    }
+  }, [remoteStream]);
+
   const callRemotePeer = () => {
     if (!peer || !remotePeerIdValue || !localStream) {
       alert("System not ready or Peer ID not entered.");
