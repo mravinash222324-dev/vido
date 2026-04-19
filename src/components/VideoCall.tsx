@@ -110,18 +110,9 @@ export default function VideoCall() {
       if (peerInstance) {
         peerInstance.destroy();
       }
-      if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (remoteStream && remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = remoteStream;
-    }
-  }, [remoteStream]);
 
   const callRemotePeer = () => {
     if (!peer || !remotePeerIdValue || !localStream) {
