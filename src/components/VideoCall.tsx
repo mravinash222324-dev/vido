@@ -49,27 +49,20 @@ export default function VideoCall() {
 
         const PeerJs = (await import('peerjs')).default;
         
+        let dynamicIceServers = [];
+        try {
+           const turnRes = await fetch('/api/turn');
+           dynamicIceServers = await turnRes.json();
+        } catch (e) {
+           console.error('Failed to fetch turn servers', e);
+        }
+        
         // Connect to the free default PeerJS cloud server
         peerInstance = new PeerJs({
           config: {
-            iceServers: [
+            iceServers: dynamicIceServers.length > 0 ? dynamicIceServers : [
               { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:global.stun.twilio.com:3478' },
-              {
-                urls: 'turn:openrelay.metered.ca:80',
-                username: 'openrelayproject',
-                credential: 'openrelayproject'
-              },
-              {
-                urls: 'turn:openrelay.metered.ca:443',
-                username: 'openrelayproject',
-                credential: 'openrelayproject'
-              },
-              {
-                urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-                username: 'openrelayproject',
-                credential: 'openrelayproject'
-              }
+              { urls: 'stun:global.stun.twilio.com:3478' }
             ]
           }
         });
