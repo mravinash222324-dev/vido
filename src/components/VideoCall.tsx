@@ -127,9 +127,9 @@ export default function VideoCall() {
         try { await meeting.startVideo(); } catch (e) {}
         try { await meeting.startAudio(); } catch (e) {}
 
-    } catch (e) {
+    } catch (e: any) {
         console.error("Match error:", e);
-        setStatus('Matching failed');
+        setStatus(`Error: ${e?.message || e?.name || String(e)}`);
     }
 
     setIsSearching(false);
