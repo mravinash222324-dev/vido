@@ -215,20 +215,24 @@ export default function VideoCall() {
               </motion.div>
             ) : (
                 <div className="w-full h-full relative">
-                  <motion.video
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    ref={remoteVideoRef}
+                  <video
+                    ref={(node) => {
+                       if (node) {
+                          remoteVideoRef.current = node;
+                          if (node.srcObject !== remoteStream) {
+                             node.srcObject = remoteStream;
+                          }
+                       }
+                    }}
                     autoPlay
                     playsInline
                     onLoadedMetadata={(e) => {
                       e.currentTarget.play().catch(err => {
                          console.error("Autoplay prevented:", err);
-                         alert("Please tap the video to let it play.");
                       });
                     }}
                     onClick={(e) => { e.currentTarget.play() }}
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-cover animate-in fade-in duration-500"
                   />
                   {!remoteStream?.active && (
                     <div className="absolute inset-0 flex items-center justify-center text-white bg-black/50">
