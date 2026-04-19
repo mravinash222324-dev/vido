@@ -214,14 +214,28 @@ export default function VideoCall() {
                 <p className="max-w-md">Share your ID with a friend, or paste their ID in the sidebar to start a secure P2P free video call.</p>
               </motion.div>
             ) : (
-                <motion.video
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  ref={remoteVideoRef}
-                  autoPlay
-                  playsInline
-                  className="w-full h-full object-cover"
-                />
+                <div className="w-full h-full relative">
+                  <motion.video
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    ref={remoteVideoRef}
+                    autoPlay
+                    playsInline
+                    onLoadedMetadata={(e) => {
+                      e.currentTarget.play().catch(err => {
+                         console.error("Autoplay prevented:", err);
+                         alert("Please tap the video to let it play.");
+                      });
+                    }}
+                    onClick={(e) => { e.currentTarget.play() }}
+                    className="w-full h-full object-cover"
+                  />
+                  {!remoteStream?.active && (
+                    <div className="absolute inset-0 flex items-center justify-center text-white bg-black/50">
+                       Video feed paused or loading...
+                    </div>
+                  )}
+                </div>
             )}
           </AnimatePresence>
 
