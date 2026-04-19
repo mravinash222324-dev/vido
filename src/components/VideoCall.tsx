@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { supabase } from '@/lib/supabaseClient';
 import { 
   Phone, 
   PhoneOff, 
@@ -13,12 +14,15 @@ import {
   CheckCircle2, 
   UserPlus, 
   SignalHigh,
-  Loader2
+  Loader2,
+  Shuffle
 } from 'lucide-react';
 
 export default function VideoCall() {
   const [meeting, setMeeting] = useState<any>(null);
-  const [roomIdValue, setRoomIdValue] = useState<string>('lobby'); // Default simple room
+  const [roomIdValue, setRoomIdValue] = useState<string>(''); 
+  const [myQueueId, setMyQueueId] = useState<string | null>(null);
+  const [isSearching, setIsSearching] = useState(false);
   
   const [isJoined, setIsJoined] = useState(false);
   const [remoteStreamState, setRemoteStreamState] = useState<MediaStream | null>(null);
@@ -26,7 +30,7 @@ export default function VideoCall() {
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [status, setStatus] = useState<string>('Ready to connect');
+  const [status, setStatus] = useState<string>('Ready to match');
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -45,33 +49,90 @@ export default function VideoCall() {
     return () => clearInterval(interval);
   }, [meeting]);
 
-  const joinMeeting = async () => {
-    if (!meeting || !roomIdValue) {
-      alert("System not ready or Room ID not entered.");
-      return;
+  // Clean up queue if user leaves page
+  useEffect(() => {
+    const cleanup = () => {
+       if (myQueueId) {
+          supabase.from('waiting_queue').delete().eq('id', myQueueId).then();
+       }
+    };
+    window.addEventListener('beforeunload', cleanup);
+    return () => {
+       window.removeEventListener('beforeunload', cleanup);
+       cleanup();
+    };
+  }, [myQueueId]);
+
+  const handleNext = async () => {
+    if (!meeting) return;
+
+    if (isJoined) {
+       await meeting.leave();
+       if (myQueueId) {
+          await supabase.from('waiting_queue').delete().eq('id', myQueueId);
+          setMyQueueId(null);
+       }
+       setIsJoined(false);
+       setRemoteStreamState(null);
+       if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
     }
 
-    setStatus('Joining...');
-    
+    setIsSearching(true);
+    setStatus('Searching for stranger...');
+
     try {
-      // Must match your precise Metered domain
-      const roomURL = `voughtinternational.metered.live/${roomIdValue}`;
-      await meeting.join({ roomURL: roomURL, name: "User" });
-      
-      setIsJoined(true);
-      setStatus('In Call');
+        // 1. Look for someone waiting
+        const { data, error } = await supabase
+          .from('waiting_queue')
+          .select('*')
+          .order('created_at', { ascending: true })
+          .limit(1);
 
-      // Bind events before starting hardware
-      setupMeetingEvents(meeting);
+        if (data && data.length > 0) {
+           const target = data[0];
+           // Claim the row so no one else joins
+           const { error: delErr } = await supabase.from('waiting_queue').delete().eq('id', target.id);
+           
+           if (!delErr) {
+               // Successfully claimed, join their room!
+               const roomURL = `voughtinternational.metered.live/${target.room_id}`;
+               setRoomIdValue(target.room_id);
+               await meeting.join({ roomURL, name: "Stranger" });
+               
+               setIsJoined(true);
+               setStatus('Connected to stranger!');
+               setupMeetingEvents(meeting);
+               try { await meeting.startVideo(); } catch (e) {}
+               try { await meeting.startAudio(); } catch (e) {}
+               setIsSearching(false);
+               return;
+           }
+        }
 
-      // Start hardware
-      try { await meeting.startVideo(); } catch (e) { console.error("Camera Error", e); }
-      try { await meeting.startAudio(); } catch (e) { console.error("Mic Error", e); }
-      
+        // 2. No one waiting (or claim failed), create our own room and wait
+        const newRoomId = Math.random().toString(36).substring(2, 10);
+        setRoomIdValue(newRoomId);
+
+        // Put ourselves in the queue
+        const { data: insertData } = await supabase.from('waiting_queue').insert({ room_id: newRoomId }).select();
+        if (insertData && insertData.length > 0) {
+            setMyQueueId(insertData[0].id);
+        }
+
+        const roomURL = `voughtinternational.metered.live/${newRoomId}`;
+        await meeting.join({ roomURL, name: "Me" });
+        setIsJoined(true);
+        setStatus('Waiting for stranger...');
+        setupMeetingEvents(meeting);
+        try { await meeting.startVideo(); } catch (e) {}
+        try { await meeting.startAudio(); } catch (e) {}
+
     } catch (e) {
-      console.error("Join Error:", e);
-      setStatus("Join failed (Did you create the room?)");
+        console.error("Match error:", e);
+        setStatus('Matching failed');
     }
+
+    setIsSearching(false);
   };
 
   const setupMeetingEvents = (m: any) => {
@@ -247,12 +308,12 @@ export default function VideoCall() {
                     </div>
 
                     <button 
-                        onClick={joinMeeting}
-                        disabled={!meeting || !roomIdValue}
+                        onClick={handleNext}
+                        disabled={!meeting || isSearching}
                         className="w-full py-5 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white rounded-xl font-black text-lg flex items-center justify-center gap-3 transition-all shadow-xl shadow-purple-900/20 disabled:opacity-50 disabled:grayscale"
                     >
-                        {!meeting ? <Loader2 className="w-6 h-6 animate-spin" /> : <Video className="w-6 h-6" />}
-                        <span>{!meeting ? 'Initializing Engine...' : 'Join Video Chat'}</span>
+                        {isSearching ? <Loader2 className="w-6 h-6 animate-spin" /> : <Video className="w-6 h-6" />}
+                        <span>{isSearching ? 'Matching...' : (!meeting ? 'Initializing Engine...' : 'Find Random Stranger')}</span>
                     </button>
                     
                     <div className="flex items-center justify-center gap-2 text-xs text-slate-500 font-medium pt-2">
@@ -298,7 +359,7 @@ export default function VideoCall() {
         >
           <div className="hidden md:flex items-center gap-2 mr-4 bg-slate-950/50 py-2 px-4 rounded-full border border-slate-800">
              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-             <span className="text-xs font-bold text-slate-300">Room: {roomIdValue}</span>
+             <span className="text-xs font-bold text-slate-300 truncate max-w-[100px]">Room: {roomIdValue}</span>
           </div>
 
           <button 
@@ -309,7 +370,13 @@ export default function VideoCall() {
           </button>
           
           <button 
-            onClick={leaveMeeting}
+            onClick={() => {
+                leaveMeeting();
+                if (myQueueId) {
+                   supabase.from('waiting_queue').delete().eq('id', myQueueId).then();
+                   setMyQueueId(null);
+                }
+            }}
             className="w-16 h-16 md:w-20 md:h-20 rounded-full bg-red-600 hover:bg-red-500 flex items-center justify-center transition-transform hover:scale-105 shadow-xl shadow-red-600/30 text-white mx-2"
           >
               <PhoneOff className="w-7 h-7 md:w-8 md:h-8" />
@@ -323,10 +390,11 @@ export default function VideoCall() {
           </button>
 
           <button 
-            onClick={leaveMeeting} // Temporarily acts as "Next" by leaving, but true omegle logic requires pairing rewrite
-            className="w-12 h-12 md:w-14 md:h-14 rounded-full flex items-center justify-center transition-all shadow-lg bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 font-black text-xs uppercase ml-1 md:ml-4 border border-blue-500/20"
+            onClick={handleNext}
+            disabled={isSearching}
+            className="w-12 h-12 md:w-14 md:h-14 rounded-full flex items-center justify-center transition-all shadow-lg bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 font-black text-xs uppercase ml-1 md:ml-4 border border-blue-500/20 disabled:opacity-50"
           >
-              Next
+              {isSearching ? <Shuffle className="w-5 h-5 animate-spin" /> : 'Next'}
           </button>
         </motion.div>
        )}
