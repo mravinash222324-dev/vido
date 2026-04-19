@@ -95,8 +95,16 @@ export default function VideoCall() {
            
            if (!delErr) {
                // Successfully claimed, join their room!
-               const roomURL = `voughtinternational.metered.live/${target.room_id}`;
-               setRoomIdValue(target.room_id);
+               const roomID = target.room_id;
+               
+               // PRE-FLIGHT: Ensure room exists
+               await fetch('/api/create-room', {
+                 method: 'POST',
+                 body: JSON.stringify({ roomName: roomID })
+               });
+
+               const roomURL = `voughtinternational.metered.live/${roomID}`;
+               setRoomIdValue(roomID);
                await meeting.join({ roomURL, name: "Stranger" });
                
                setIsJoined(true);
@@ -112,6 +120,16 @@ export default function VideoCall() {
         // 2. No one waiting (or claim failed), create our own room and wait
         const newRoomId = Math.random().toString(36).substring(2, 10);
         setRoomIdValue(newRoomId);
+
+        // PRE-FLIGHT: Create the room on Metered SFU via our secure backend
+        const createRes = await fetch('/api/create-room', {
+            method: 'POST',
+            body: JSON.stringify({ roomName: newRoomId })
+        });
+        
+        if (!createRes.ok) {
+            throw new Error(`Failed to provision room: ${createRes.statusText}`);
+        }
 
         // Put ourselves in the queue
         const { data: insertData } = await supabase.from('waiting_queue').insert({ room_id: newRoomId }).select();
