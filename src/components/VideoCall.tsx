@@ -189,7 +189,14 @@ export default function VideoCall() {
             ) : (
                 <div className="w-full h-full relative">
                   <video
-                    ref={remoteVideoRef}
+                    ref={(node) => {
+                       if (node) {
+                          remoteVideoRef.current = node;
+                          if (node.srcObject !== remoteStreamState) {
+                             node.srcObject = remoteStreamState;
+                          }
+                       }
+                    }}
                     autoPlay
                     playsInline
                     onClick={(e) => { e.currentTarget.play() }}
