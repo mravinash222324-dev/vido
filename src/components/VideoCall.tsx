@@ -50,7 +50,15 @@ export default function VideoCall() {
         const PeerJs = (await import('peerjs')).default;
         
         // Connect to the free default PeerJS cloud server
-        peerInstance = new PeerJs();
+        peerInstance = new PeerJs({
+          config: {
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:global.stun.twilio.com:3478' },
+              { urls: 'stun:stun.1und1.de:3478' }
+            ]
+          }
+        });
 
         peerInstance.on('open', (id) => {
           setPeerId(id);
