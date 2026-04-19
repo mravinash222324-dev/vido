@@ -15,167 +15,154 @@ import {
   SignalHigh,
   Loader2
 } from 'lucide-react';
-import type Peer from 'peerjs';
-import type { MediaConnection } from 'peerjs';
 
 export default function VideoCall() {
-  const [peer, setPeer] = useState<Peer | null>(null);
-  const [peerId, setPeerId] = useState<string>('');
-  const [remotePeerIdValue, setRemotePeerIdValue] = useState<string>('');
+  const [meeting, setMeeting] = useState<any>(null);
+  const [roomIdValue, setRoomIdValue] = useState<string>('lobby'); // Default simple room
   
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const [currentCall, setCurrentCall] = useState<MediaConnection | null>(null);
+  const [isJoined, setIsJoined] = useState(false);
+  const [remoteStreamState, setRemoteStreamState] = useState<MediaStream | null>(null);
 
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [status, setStatus] = useState<string>('Initializing...');
+  const [status, setStatus] = useState<string>('Ready to connect');
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement>(null); // For remote audio tracks
 
+  // Initialize the meeting instance when Metered SDK is available
   useEffect(() => {
-    // Dynamic import to avoid SSR issues with PeerJS
-    let peerInstance: Peer;
-
-    const initPeer = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        setLocalStream(stream);
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
-        }
-
-        const PeerJs = (await import('peerjs')).default;
-        
-        let dynamicIceServers = [];
-        try {
-           const turnRes = await fetch('/api/turn');
-           dynamicIceServers = await turnRes.json();
-        } catch (e) {
-           console.error('Failed to fetch turn servers', e);
-        }
-        
-        // Connect to the free default PeerJS cloud server
-        peerInstance = new PeerJs({
-          config: {
-            iceServers: dynamicIceServers.length > 0 ? dynamicIceServers : [
-              { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:global.stun.twilio.com:3478' }
-            ]
-          }
-        });
-
-        peerInstance.on('open', (id) => {
-          setPeerId(id);
-          setStatus('Ready to connect');
-        });
-
-        peerInstance.on('call', (call) => {
-          // Answer automatically with our setup
-          call.answer(stream);
-          setCurrentCall(call);
-          setStatus('In Call');
-
-          call.on('stream', (remoteStream) => {
-            setRemoteStream(remoteStream);
-            if (remoteVideoRef.current) {
-              remoteVideoRef.current.srcObject = remoteStream;
-            }
-          });
-
-          call.on('close', () => {
-            endCall();
-          });
-        });
-
-        setPeer(peerInstance);
-      } catch (err) {
-        console.error("Failed to get local stream or initialize PeerJS", err);
-        setStatus('Error: Microphone/Camera access denied');
+    // Polling to wait for sdk.min.js to inject window.Metered
+    const interval = setInterval(() => {
+      if ((window as any).Metered && !meeting) {
+        const m = new (window as any).Metered.Meeting();
+        setMeeting(m);
+        clearInterval(interval);
       }
-    };
+    }, 100);
+    return () => clearInterval(interval);
+  }, [meeting]);
 
-    initPeer();
-
-    return () => {
-      if (peerInstance) {
-        peerInstance.destroy();
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const callRemotePeer = () => {
-    if (!peer || !remotePeerIdValue || !localStream) {
-      alert("System not ready or Peer ID not entered.");
+  const joinMeeting = async () => {
+    if (!meeting || !roomIdValue) {
+      alert("System not ready or Room ID not entered.");
       return;
     }
 
-    setStatus('Calling...');
-    const call = peer.call(remotePeerIdValue, localStream);
-    setCurrentCall(call);
-
-    call.on('stream', (remoteStream) => {
-      setRemoteStream(remoteStream);
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = remoteStream;
-      }
-      setStatus('In Call');
-    });
-
-    call.on('close', () => {
-      endCall();
-    });
+    setStatus('Joining...');
     
-    call.on('error', (err) => {
-       console.error("Call error:", err);
-       setStatus('Call failed');
+    try {
+      // Must match your precise Metered domain
+      const roomURL = `voughtinternational.metered.live/${roomIdValue}`;
+      await meeting.join({ roomURL: roomURL, name: "User" });
+      
+      setIsJoined(true);
+      setStatus('In Call');
+
+      // Bind events before starting hardware
+      setupMeetingEvents(meeting);
+
+      // Start hardware
+      try { await meeting.startVideo(); } catch (e) { console.error("Camera Error", e); }
+      try { await meeting.startAudio(); } catch (e) { console.error("Mic Error", e); }
+      
+    } catch (e) {
+      console.error("Join Error:", e);
+      setStatus("Join failed (Did you create the room?)");
+    }
+  };
+
+  const setupMeetingEvents = (m: any) => {
+    // Handle Local Tracks
+    m.on("localTrackStarted", function(item: any) {
+      if (item.type === "video") {
+        const track = item.track;
+        const mediaStream = new MediaStream([track]);
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = mediaStream;
+        }
+      }
+      // Note: We don't play local audio to prevent echo
+    });
+
+    // Handle Remote Tracks
+    m.on("remoteTrackStarted", function(remoteTrackItem: any) {
+      const track = remoteTrackItem.track;
+      const mediaStream = new MediaStream([track]);
+
+      if (remoteTrackItem.type === "video") {
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = mediaStream;
+          remoteVideoRef.current.play().catch(e => console.error("Remote video play intercepted", e));
+        }
+        // Force re-render of UI
+        setRemoteStreamState(mediaStream);
+      }
+
+      if (remoteTrackItem.type === "audio") {
+         if (remoteAudioRef.current) {
+            remoteAudioRef.current.srcObject = mediaStream;
+            remoteAudioRef.current.play().catch(e => console.error("Remote audio play intercepted", e));
+         }
+      }
+    });
+
+    m.on("participantLeft", function() {
+        // If it's a 1-on-1, clear remote video implicitly when they leave
+        setRemoteStreamState(null);
+        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
     });
   };
 
-  const endCall = () => {
-    if (currentCall) {
-      currentCall.close();
+  const leaveMeeting = async () => {
+    if (meeting) {
+      try {
+        await meeting.leave();
+      } catch(e) {
+        console.error("Leave error", e);
+      }
     }
-    setRemoteStream(null);
-    setCurrentCall(null);
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = null;
-    }
+    setIsJoined(false);
+    setRemoteStreamState(null);
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
     setStatus('Ready to connect');
   };
 
-  const toggleMute = () => {
-    if (localStream) {
-      localStream.getAudioTracks().forEach(track => {
-        track.enabled = !track.enabled;
-      });
-      setIsMuted(!isMuted);
+  const toggleMute = async () => {
+    if (!meeting) return;
+    if (isMuted) {
+      await meeting.unmuteAudio();
+    } else {
+      await meeting.muteAudio();
     }
+    setIsMuted(!isMuted);
   };
 
-  const toggleVideo = () => {
-    if (localStream) {
-      localStream.getVideoTracks().forEach(track => {
-        track.enabled = !track.enabled;
-      });
-      setIsVideoOff(!isVideoOff);
+  const toggleVideo = async () => {
+    if (!meeting) return;
+    if (isVideoOff) {
+      await meeting.startVideo();
+    } else {
+      await meeting.stopVideo();
     }
+    setIsVideoOff(!isVideoOff);
   };
 
   const copyToClipboard = () => {
-    if (peerId) {
-      navigator.clipboard.writeText(peerId);
+      navigator.clipboard.writeText(roomIdValue);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    }
   };
 
   return (
     <div className="min-h-[calc(100vh-3.5rem)] bg-[#020617] text-slate-200 flex flex-col md:flex-row p-4 gap-6 relative overflow-hidden">
       
+      {/* Hidden Audio element for remote audio */}
+      <audio ref={remoteAudioRef} autoPlay />
+
       {/* Background Decor */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-purple-600/20 rounded-full blur-[120px] pointer-events-none" />
 
@@ -184,7 +171,7 @@ export default function VideoCall() {
         <div className="flex-1 rounded-3xl overflow-hidden glass border border-slate-800 bg-slate-900/50 shadow-2xl relative flex items-center justify-center min-h-[400px]">
           
           <AnimatePresence mode="wait">
-            {!remoteStream ? (
+            {!remoteStreamState ? (
               <motion.div 
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
@@ -194,33 +181,23 @@ export default function VideoCall() {
                 <div className="w-20 h-20 rounded-full bg-slate-800/50 border border-slate-700 flex items-center justify-center mb-4">
                   <UserPlus className="w-10 h-10 text-slate-600" />
                 </div>
-                <h2 className="text-2xl font-bold font-heading text-slate-300">Waiting for connection</h2>
-                <p className="max-w-md">Share your ID with a friend, or paste their ID in the sidebar to start a secure P2P free video call.</p>
+                <h2 className="text-2xl font-bold font-heading text-slate-300">
+                   {isJoined ? "Waiting for others to join..." : "Waiting to join room"}
+                </h2>
+                <p className="max-w-md">Join the highly-scalable Metered SFU room to instantly connect over any network globally.</p>
               </motion.div>
             ) : (
                 <div className="w-full h-full relative">
                   <video
-                    ref={(node) => {
-                       if (node) {
-                          remoteVideoRef.current = node;
-                          if (node.srcObject !== remoteStream) {
-                             node.srcObject = remoteStream;
-                          }
-                       }
-                    }}
+                    ref={remoteVideoRef}
                     autoPlay
                     playsInline
-                    onLoadedMetadata={(e) => {
-                      e.currentTarget.play().catch(err => {
-                         console.error("Autoplay prevented:", err);
-                      });
-                    }}
                     onClick={(e) => { e.currentTarget.play() }}
-                    className="w-full h-full object-cover animate-in fade-in duration-500"
+                    className="w-full h-full object-cover animate-in fade-in duration-500 bg-black"
                   />
-                  {!remoteStream?.active && (
-                    <div className="absolute inset-0 flex items-center justify-center text-white bg-black/50">
-                       Video feed paused or loading...
+                  {!remoteStreamState?.active && (
+                    <div className="absolute inset-0 flex items-center justify-center text-white bg-black/50 pointer-events-none">
+                       Video feed processing...
                     </div>
                   )}
                 </div>
@@ -231,7 +208,7 @@ export default function VideoCall() {
           <motion.div 
             drag
             dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
-            className="absolute bottom-6 right-6 w-48 h-64 bg-slate-950 rounded-2xl overflow-hidden border-2 border-slate-700 shadow-2xl shadow-black/50 cursor-move group z-20"
+            className={`absolute bottom-6 right-6 w-48 h-64 bg-slate-950 rounded-2xl overflow-hidden border-2 border-slate-700 shadow-2xl shadow-black/50 cursor-move group z-20 transition-opacity ${!isJoined ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
           >
              <video
                 ref={localVideoRef}
@@ -241,7 +218,7 @@ export default function VideoCall() {
                 className={`w-full h-full object-cover ${isVideoOff ? 'opacity-0' : 'opacity-100'}`}
               />
               {isVideoOff && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-slate-900">
+                  <div className="absolute inset-0 flex items-center justify-center bg-slate-900 pointer-events-none">
                       <VideoOff className="w-8 h-8 text-slate-500" />
                   </div>
               )}
@@ -251,7 +228,7 @@ export default function VideoCall() {
           </motion.div>
 
            {/* In Call Controls Overlay */}
-           {currentCall && (
+           {isJoined && (
             <motion.div 
               initial={{ y: 50, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
@@ -265,7 +242,7 @@ export default function VideoCall() {
               </button>
               
               <button 
-                onClick={endCall}
+                onClick={leaveMeeting}
                 className="w-14 h-14 rounded-full bg-red-600 hover:bg-red-500 flex items-center justify-center transition-all shadow-lg shadow-red-600/20 text-white"
               >
                   <PhoneOff className="w-6 h-6" />
@@ -294,63 +271,51 @@ export default function VideoCall() {
                <div>
                   <h3 className="font-bold text-lg">Connection</h3>
                   <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                      <span className={`w-2 h-2 rounded-full ${isJoined ? 'bg-green-500 animate-pulse' : 'bg-slate-500'}`} />
                       <span className="text-sm text-slate-400">{status}</span>
                   </div>
                </div>
-            </div>
-
-            <div className="space-y-4">
-                <div>
-                    <label className="text-xs text-slate-400 uppercase tracking-wider font-semibold mb-2 block">Your Personal ID</label>
-                    <div className="flex bg-slate-950 border border-slate-800 rounded-xl overflow-hidden focus-within:border-purple-500/50 transition-colors">
-                        <input 
-                            readOnly 
-                            value={peerId || 'Generating...'} 
-                            className="bg-transparent flex-1 px-4 py-3 text-slate-300 outline-none w-full"
-                        />
-                        <button 
-                            onClick={copyToClipboard}
-                            disabled={!peerId}
-                            className="bg-slate-800 hover:bg-slate-700 px-4 flex items-center justify-center text-slate-400 hover:text-slate-200 transition-colors disabled:opacity-50"
-                            title="Copy ID"
-                        >
-                            {copied ? <CheckCircle2 className="w-5 h-5 text-green-400" /> : <Copy className="w-5 h-5" />}
-                        </button>
-                    </div>
-                </div>
             </div>
         </div>
 
         {/* Action Card */}
         <div className="glass bg-slate-900/50 border border-slate-800 rounded-3xl p-6 flex-1">
-            <h3 className="font-bold text-lg mb-6">Connect to Peer</h3>
+            <h3 className="font-bold text-lg mb-6">Connect to Room</h3>
             <div className="space-y-4">
                 <div>
-                    <label className="text-xs text-slate-400 uppercase tracking-wider font-semibold mb-2 block">Friend's ID</label>
+                    <label className="text-xs text-slate-400 uppercase tracking-wider font-semibold mb-2 block">Enterprise Room Name</label>
                     <div className="flex bg-slate-950 border border-slate-800 rounded-xl overflow-hidden focus-within:border-blue-500/50 transition-colors">
                         <input 
-                            value={remotePeerIdValue}
-                            onChange={(e) => setRemotePeerIdValue(e.target.value)}
-                            placeholder="Paste ID here..."
+                            value={roomIdValue}
+                            onChange={(e) => setRoomIdValue(e.target.value)}
+                            placeholder="Enter room name..."
                             className="bg-transparent flex-1 px-4 py-3 text-slate-300 outline-none w-full placeholder:text-slate-600"
                         />
+                         <button 
+                            onClick={copyToClipboard}
+                            disabled={!roomIdValue}
+                            className="bg-slate-800 hover:bg-slate-700 px-4 flex items-center justify-center text-slate-400 hover:text-slate-200 transition-colors disabled:opacity-50"
+                            title="Copy Room ID"
+                        >
+                            {copied ? <CheckCircle2 className="w-5 h-5 text-green-400" /> : <Copy className="w-5 h-5" />}
+                        </button>
                     </div>
+                    <p className="text-xs text-slate-500 mt-2">Any two people connecting to the same room will instantly link via the Metered SFU.</p>
                 </div>
 
                 <button 
-                    onClick={callRemotePeer}
-                    disabled={!peer || !remotePeerIdValue || !!currentCall}
-                    className="w-full py-4 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg hover:shadow-purple-500/25 disabled:opacity-50 disabled:grayscale"
+                    onClick={isJoined ? leaveMeeting : joinMeeting}
+                    disabled={!meeting || !roomIdValue}
+                    className={`w-full py-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg disabled:opacity-50 disabled:grayscale ${isJoined ? 'bg-slate-800 text-white hover:bg-slate-700' : 'bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white hover:shadow-purple-500/25'}`}
                 >
-                    {(!peer || !localStream) ? <Loader2 className="w-5 h-5 animate-spin" /> : <Phone className="w-5 h-5" />}
-                    <span>{currentCall ? 'In Call' : 'Join Call'}</span>
+                    {!meeting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Phone className="w-5 h-5" />}
+                    <span>{isJoined ? 'Connected (Leave)' : 'Join Video Call'}</span>
                 </button>
             </div>
 
             <div className="mt-8 text-center bg-slate-950/40 border border-slate-800 p-4 rounded-2xl">
                <p className="text-xs text-slate-400 leading-relaxed">
-                   This application uses free P2P WebRTC technology. Connections are handled securely directly between you and your peer without external media routing! 🚀
+                   🔥 UPGRADED to Metered Video SDK! Video is now routed securely through a carrier-agnostic SFU cluster instead of blocking P2P nodes.
                </p>
             </div>
         </div>
