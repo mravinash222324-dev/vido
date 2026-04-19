@@ -6,7 +6,7 @@ export async function GET() {
     const apiKey = 'jq22-ASlzgFdCu1XVytufGZWFAvmbrtghXU2aGdrVt9Akywv';
     
     // Fetch live TURN server credentials from Metered API
-    const res = await fetch(\`https://\${domain}/api/v1/turn/credentials?apiKey=\${apiKey}\`, {
+    const res = await fetch(`https://${domain}/api/v1/turn/credentials?apiKey=${apiKey}`, {
         cache: 'no-store' // Ensure we get fresh temporary credentials
     });
     
